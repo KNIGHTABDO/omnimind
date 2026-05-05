@@ -1,6 +1,4 @@
 import axios from "axios";
-import { streamText } from "ai";
-import { createOpenAI } from "@ai-sdk/openai";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -427,29 +425,78 @@ The UI will automatically display the sources based on metadata. Simply provide 
           throw new Error("Missing GROQ_API_KEY");
         }
 
-        const provider = createOpenAI({ apiKey: GROQ_API_KEY, baseURL: "https://api.groq.com/openai/v1" });
-        const result = await streamText({
-          model: provider(modelId),
-          messages: enrichedMessages as any,
+        const groqResponse = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${GROQ_API_KEY}`,
+            "Content-Type": "application/json",
+            Accept: "text/event-stream",
+          },
+          body: JSON.stringify({
+            model: modelId,
+            messages: enrichedMessages,
+            stream: true,
+          }),
         });
 
-        let streamedText = "";
-
-        for await (const text of result.textStream) {
-          streamedText += text;
-          await writeLine({ text, model: modelId, rationale: routingRationale, citations, reasoning: reasoningChain });
+        if (!groqResponse.ok) {
+          const errText = await groqResponse.text();
+          throw new Error(`Groq API error (${groqResponse.status}): ${errText}`);
         }
 
-        if (!streamedText.trim()) {
-          const finalText = await result.text;
-          if (finalText?.trim()) {
-            await writeLine({
-              text: finalText,
-              model: modelId,
-              rationale: routingRationale,
-              citations,
-              reasoning: reasoningChain,
-            });
+        const responseType = groqResponse.headers.get("content-type") || "";
+        if (responseType.includes("application/json")) {
+          const json = await groqResponse.json();
+          const text = extractAssistantText(json);
+          const reasoningDelta = extractAssistantReasoning(json);
+
+          if (reasoningDelta) {
+            reasoningChain += `\n${reasoningDelta}`;
+          }
+
+          if (text || reasoningDelta) {
+            await writeLine({ text, model: modelId, rationale: routingRationale, citations, reasoning: reasoningChain });
+          }
+
+          await writer.close();
+          return;
+        }
+
+        const reader = groqResponse.body?.getReader();
+        const decoder = new TextDecoder();
+        let sseBuffer = "";
+
+        const flushSseEventBlock = async (eventBlock: string) => {
+          const sseData = parseSseEventBlock(eventBlock);
+          if (!sseData) return;
+
+          const reasoningDelta = extractAssistantReasoning(sseData);
+          if (reasoningDelta) {
+            reasoningChain += `\n${reasoningDelta}`;
+          }
+
+          const text = extractAssistantText(sseData);
+          if (text || reasoningDelta) {
+            await writeLine({ text, model: modelId, rationale: routingRationale, citations, reasoning: reasoningChain });
+          }
+        };
+
+        if (reader) {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            sseBuffer += decoder.decode(value, { stream: true });
+            const eventBlocks = sseBuffer.split("\n\n");
+            sseBuffer = eventBlocks.pop() || "";
+
+            for (const eventBlock of eventBlocks) {
+              await flushSseEventBlock(eventBlock);
+            }
+          }
+
+          if (sseBuffer.trim()) {
+            await flushSseEventBlock(sseBuffer);
           }
         }
 
