@@ -16,6 +16,7 @@ async function tinyfishSearch(query: string) {
     const response = await axios.get("https://api.search.tinyfish.ai", {
       params: { query },
       headers: { "X-API-Key": TINYFISH_KEY },
+      timeout: 15000,
     });
     return response.data;
   } catch {
@@ -29,6 +30,7 @@ async function tinyfishFetch(url: string) {
     const response = await axios.get("https://api.fetch.tinyfish.ai", {
       params: { url },
       headers: { "X-API-Key": TINYFISH_KEY },
+      timeout: 15000,
     });
     return response.data;
   } catch {
@@ -55,6 +57,7 @@ async function getCopilotToken() {
       "User-Agent": "GithubCopilot/1.155.0",
       Accept: "application/json",
     },
+    timeout: 15000,
   });
 
   cachedToken = response.data.token || undefined;
@@ -130,57 +133,71 @@ const MODEL_CHAINS = {
 type ChatMessage = { role: string; content: string };
 
 export async function POST(req: Request) {
-  try {
-    const data = (await req.json()) as { messages: ChatMessage[]; model: string; attachments?: string[] };
-    const { messages, model, attachments } = data;
+  const { readable, writable } = new TransformStream();
+  const writer = writable.getWriter();
+  const encoder = new TextEncoder();
 
-    const category = (model as keyof typeof MODEL_CHAINS) || "omnimind-1";
-    const chain = MODEL_CHAINS[category] || MODEL_CHAINS["omnimind-1"];
+  const writeLine = async (payload: any) => {
+    await writer.write(encoder.encode(`${JSON.stringify(payload)}\n`));
+  };
 
-    let documentContext = "";
-    let visionContext = "";
-    let visionAdvisory = "";
-    let reasoningChain = "🧠 OmniMind Brain initiated.";
+  void (async () => {
+    try {
+      const data = (await req.json()) as { messages: ChatMessage[]; model: string; attachments?: string[] };
+      const fullMessages = data.messages ?? [];
+      const messages = fullMessages.length > 24 ? fullMessages.slice(-24) : fullMessages;
+      const model = data.model;
+      const attachments = data.attachments;
 
-    if (attachments && attachments.length > 0) {
-      for (const attachment of attachments) {
-        if (attachment.startsWith("data:image/")) {
-          if (category !== "omnimind-1-vision") {
-            visionAdvisory =
-              "\n\n[SYSTEM ADVISORY]: The user has uploaded an image but is NOT in 'OmniMind-1 Vision' mode. You must briefly mention that for professional-grade vision analysis they should switch to Vision mode.\n\n";
-            reasoningChain += "\n⚠️ Vision specialist pool recommended for high-fidelity image analysis.";
-          }
-          const analysis = await analyzeImageWithMoondream(attachment);
-          if (analysis) {
-            visionContext += `[VISUAL CONTEXT]: ${analysis}\n\n`;
-            reasoningChain += "\n👁️ Vision specialist analyzed image successfully.";
-          }
-        } else if (attachment.startsWith("data:text/") || attachment.startsWith("data:application/")) {
-          try {
-            const [meta, base64Data] = attachment.split(",");
-            const decoded = Buffer.from(base64Data, "base64").toString("utf-8");
-            documentContext += `[DOCUMENT CONTENT]:\n${decoded}\n\n`;
-            reasoningChain += `\n📄 Document ingested: ${meta.split(";")[0].split(":")[1]}`;
-          } catch {
-            reasoningChain += "\n⚠️ Document ingestion failed.";
+      await writeLine({ text: "", reasoning: "🧠 OmniMind Brain initiated." });
+
+      const category = (model as keyof typeof MODEL_CHAINS) || "omnimind-1";
+      const chain = MODEL_CHAINS[category] || MODEL_CHAINS["omnimind-1"];
+
+      let documentContext = "";
+      let visionContext = "";
+      let visionAdvisory = "";
+      let reasoningChain = "🧠 OmniMind Brain initiated.";
+
+      if (attachments && attachments.length > 0) {
+        for (const attachment of attachments) {
+          if (attachment.startsWith("data:image/")) {
+            if (category !== "omnimind-1-vision") {
+              visionAdvisory =
+                "\n\n[SYSTEM ADVISORY]: The user has uploaded an image but is NOT in 'OmniMind-1 Vision' mode. You must briefly mention that for professional-grade vision analysis they should switch to Vision mode.\n\n";
+              reasoningChain += "\n⚠️ Vision specialist pool recommended for high-fidelity image analysis.";
+            }
+            const analysis = await analyzeImageWithMoondream(attachment);
+            if (analysis) {
+              visionContext += `[VISUAL CONTEXT]: ${analysis}\n\n`;
+              reasoningChain += "\n👁️ Vision specialist analyzed image successfully.";
+            }
+          } else if (attachment.startsWith("data:text/") || attachment.startsWith("data:application/")) {
+            try {
+              const [meta, base64Data] = attachment.split(",");
+              const decoded = Buffer.from(base64Data, "base64").toString("utf-8");
+              documentContext += `[DOCUMENT CONTENT]:\n${decoded}\n\n`;
+              reasoningChain += `\n📄 Document ingested: ${meta.split(";")[0].split(":")[1]}`;
+            } catch {
+              reasoningChain += "\n⚠️ Document ingestion failed.";
+            }
           }
         }
       }
-    }
 
-    const lastMessage = messages[messages.length - 1];
+      const lastMessage = messages[messages.length - 1];
 
-    let modelId = chain[0];
-    let routingRationale = "Primary specialist selected by default.";
-    let searchResults: any = null;
-    let fetchResults: any = null;
+      let modelId = chain[0];
+      let routingRationale = "Primary specialist selected by default.";
+      let searchResults: any = null;
+      let fetchResults: any = null;
 
-    try {
-      const poolExpertise = chain
-        .map((id) => `- ${id}: ${MODEL_EXPERTISE[id as keyof typeof MODEL_EXPERTISE] || "General purpose specialist."}`)
-        .join("\n");
+      try {
+        const poolExpertise = chain
+          .map((id) => `- ${id}: ${MODEL_EXPERTISE[id as keyof typeof MODEL_EXPERTISE] || "General purpose specialist."}`)
+          .join("\n");
 
-      const routerPrompt = `You are the OmniMind Brain Router. 
+        const routerPrompt = `You are the OmniMind Brain Router. 
 Analyze the user's request and orchestrate the BEST specialist flow.
 
 MODEL EXPERTISE MAP:
@@ -205,66 +222,71 @@ Return ONLY a JSON object:
   "thought": "Internal reasoning about this orchestration"
 }`;
 
-      const token = await getCopilotToken();
-      const routerResponse = await fetch("https://api.githubcopilot.com/chat/completions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Editor-Version": "vscode/1.85.0",
-          "Editor-Plugin-Version": "copilot/1.155.0",
-          "User-Agent": "GithubCopilot/1.155.0",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "gpt-4o-mini",
-          messages: [{ role: "system", content: routerPrompt }],
-          temperature: 0,
-          response_format: { type: "json_object" },
-        }),
-      });
+        const token = await getCopilotToken();
+        const ac = new AbortController();
+        const timeout = setTimeout(() => ac.abort(), 15000);
 
-      if (routerResponse.ok) {
-        const routerData = await routerResponse.json();
-        const routingResult = JSON.parse(routerData.choices?.[0]?.message?.content || "{}");
+        const routerResponse = await fetch("https://api.githubcopilot.com/chat/completions", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Editor-Version": "vscode/1.85.0",
+            "Editor-Plugin-Version": "copilot/1.155.0",
+            "User-Agent": "GithubCopilot/1.155.0",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "gpt-4o-mini",
+            messages: [{ role: "system", content: routerPrompt }],
+            temperature: 0,
+            response_format: { type: "json_object" },
+          }),
+          signal: ac.signal,
+        }).finally(() => clearTimeout(timeout));
 
-        if (routingResult.model && chain.includes(routingResult.model)) {
-          modelId = routingResult.model;
-          routingRationale = routingResult.rationale || "Selected based on intent analysis.";
-          reasoningChain += `\n🎯 Handpicked Specialist: ${modelId} - ${routingRationale}`;
+        if (routerResponse.ok) {
+          const routerData = await routerResponse.json();
+          const routingResult = JSON.parse(routerData.choices?.[0]?.message?.content || "{}");
 
-          if (routingResult.thought) {
-            reasoningChain += `\n💡 Brain Logic: ${routingResult.thought}`;
-          }
+          if (routingResult.model && chain.includes(routingResult.model)) {
+            modelId = routingResult.model;
+            routingRationale = routingResult.rationale || "Selected based on intent analysis.";
+            reasoningChain += `\n🎯 Handpicked Specialist: ${modelId} - ${routingRationale}`;
 
-          if (routingResult.search || routingResult.ground) {
-            const query = routingResult.searchQuery || lastMessage.content;
-            reasoningChain += `\n🔍 Engaging Web Search for: "${query}"...`;
-            searchResults = await tinyfishSearch(query);
-            reasoningChain += searchResults
-              ? `\n✅ Search complete. Found ${searchResults.results?.length || 0} sources.`
-              : "\n⚠️ Search yielded no results.";
-          }
+            if (routingResult.thought) {
+              reasoningChain += `\n💡 Brain Logic: ${routingResult.thought}`;
+            }
 
-          if (routingResult.fetch && routingResult.url) {
-            reasoningChain += `\n📖 Engaging Deep Reader for: ${routingResult.url}...`;
-            fetchResults = await tinyfishFetch(routingResult.url);
-            reasoningChain += fetchResults
-              ? `\n✅ Deep Read complete. Ingested ${fetchResults.text?.length || 0} characters.`
-              : "\n⚠️ Deep Read failed.";
+            if (routingResult.search || routingResult.ground) {
+              const query = routingResult.searchQuery || lastMessage.content;
+              reasoningChain += `\n🔍 Engaging Web Search for: "${query}"...`;
+              await writeLine({ text: "", model: modelId, rationale: routingRationale, reasoning: reasoningChain });
+              searchResults = await tinyfishSearch(query);
+              const resultCount = searchResults?.results?.length || 0;
+              reasoningChain += searchResults ? `\n✅ Search complete. Found ${resultCount} sources.` : "\n⚠️ Search yielded no results.";
+            }
+
+            if (routingResult.fetch && routingResult.url) {
+              reasoningChain += `\n📖 Engaging Deep Reader for: ${routingResult.url}...`;
+              await writeLine({ text: "", model: modelId, rationale: routingRationale, reasoning: reasoningChain });
+              fetchResults = await tinyfishFetch(routingResult.url);
+              reasoningChain += fetchResults
+                ? `\n✅ Deep Read complete. Ingested ${fetchResults.text?.length || 0} characters.`
+                : "\n⚠️ Deep Read failed.";
+            }
           }
         }
+      } catch (e: any) {
+        reasoningChain += `\n⚠️ Routing error: Falling back to default specialist. ${e?.message || ""}`.trimEnd();
       }
-    } catch (e: any) {
-      reasoningChain += `\n⚠️ Routing error: Falling back to default specialist. ${e?.message || ""}`.trimEnd();
-    }
 
-    const isGroq = modelId.includes("llama") || modelId.includes("groq") || modelId.includes("allam");
+      const isGroq = modelId.includes("llama") || modelId.includes("groq") || modelId.includes("allam");
 
-    const catalogInfo = Object.entries(MODEL_CATALOG)
-      .map(([id, desc]) => `- ${id}: ${desc}`)
-      .join("\n");
+      const catalogInfo = Object.entries(MODEL_CATALOG)
+        .map(([id, desc]) => `- ${id}: ${desc}`)
+        .join("\n");
 
-    const systemPrompt = `You are OmniMind, a premium, unified AI entity. 
+      const systemPrompt = `You are OmniMind, a premium, unified AI entity. 
 You are currently operating within the ${category} specialist pool.
 
 ROUTING CONTEXT:
@@ -282,150 +304,126 @@ ${catalogInfo}
 ${visionAdvisory ? "CRITICAL: You MUST tell the user to switch to Vision mode for better image understanding, but DO NOT mention Moondream or gpt-4o by name." : ""}
 If vision context is provided, use it to 'see' what the user has uploaded.`;
 
-    const enrichedMessages: { role: string; content: string }[] = [{ role: "system", content: systemPrompt }, ...messages.slice(0, -1)];
+      const enrichedMessages: { role: string; content: string }[] = [{ role: "system", content: systemPrompt }, ...messages.slice(0, -1)];
 
-    if (visionContext || documentContext || visionAdvisory) {
-      enrichedMessages.push({
-        role: "system",
-        content: `ATTACHMENT DATA:\n${visionContext}${documentContext}${visionAdvisory}`,
-      });
-    }
+      if (visionContext || documentContext || visionAdvisory) {
+        enrichedMessages.push({
+          role: "system",
+          content: `ATTACHMENT DATA:\n${visionContext}${documentContext}${visionAdvisory}`,
+        });
+      }
 
-    enrichedMessages.push(lastMessage);
+      enrichedMessages.push(lastMessage);
 
-    if (searchResults && searchResults.results) {
-      const searchContext = searchResults.results
-        .map((r: any) => `Source: ${r.title}\nURL: ${r.url}\nSnippet: ${r.snippet}`)
-        .join("\n\n");
-      enrichedMessages.push({
-        role: "system",
-        content: `WEB SEARCH CONTEXT:\n${searchContext}\n\nUse the above information to provide accurate and up-to-date answers. 
+      const limitedSearchResults = searchResults?.results ? searchResults.results.slice(0, 6) : [];
+
+      if (limitedSearchResults.length > 0) {
+        const searchContext = limitedSearchResults
+          .map((r: any) => `Source: ${r.title}\nURL: ${r.url}\nSnippet: ${String(r.snippet || "").slice(0, 400)}`)
+          .join("\n\n");
+        enrichedMessages.push({
+          role: "system",
+          content: `WEB SEARCH CONTEXT:\n${searchContext}\n\nUse the above information to provide accurate and up-to-date answers. 
 IMPORTANT: DO NOT include a "Sources" or "References" section in your text response. 
 The UI will automatically display the sources based on metadata. Simply provide the answer.`,
+        });
+      }
+
+      if (fetchResults && fetchResults.text) {
+        enrichedMessages.push({
+          role: "system",
+          content: `DEEP READER CONTEXT (Full Page Content):\n${fetchResults.text}\n\nUse this full page content for precise reasoning and quoting.`,
+        });
+      }
+
+      const citations = [
+        ...(limitedSearchResults.map((r: any) => ({ url: r.url, title: r.title })) || []),
+        ...(fetchResults?.url ? [{ url: fetchResults.url, title: fetchResults.title || "Deep Read Source" }] : []),
+      ];
+
+      await writeLine({ text: "", model: modelId, rationale: routingRationale, citations, reasoning: reasoningChain });
+
+      if (isGroq) {
+        if (!GROQ_API_KEY) {
+          throw new Error("Missing GROQ_API_KEY");
+        }
+
+        const provider = createOpenAI({ apiKey: GROQ_API_KEY, baseURL: "https://api.groq.com/openai/v1" });
+        const result = await streamText({
+          model: provider(modelId),
+          messages: enrichedMessages as any,
+        });
+
+        for await (const text of result.textStream) {
+          await writeLine({ text, model: modelId, rationale: routingRationale, citations, reasoning: reasoningChain });
+        }
+
+        await writer.close();
+        return;
+      }
+
+      const token = await getCopilotToken();
+      const response = await fetch("https://api.githubcopilot.com/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Editor-Version": "vscode/1.85.0",
+          "Editor-Plugin-Version": "copilot/1.155.0",
+          "User-Agent": "GithubCopilot/1.155.0",
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        },
+        body: JSON.stringify({
+          model: modelId,
+          messages: enrichedMessages,
+          stream: true,
+        }),
       });
-    }
 
-    if (fetchResults && fetchResults.text) {
-      enrichedMessages.push({
-        role: "system",
-        content: `DEEP READER CONTEXT (Full Page Content):\n${fetchResults.text}\n\nUse this full page content for precise reasoning and quoting.`,
-      });
-    }
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`GitHub API error (${response.status}): ${errText}`);
+      }
 
-    const citations = [
-      ...(searchResults?.results?.map((r: any) => ({ url: r.url, title: r.title })) || []),
-      ...(fetchResults?.url ? [{ url: fetchResults.url, title: fetchResults.title || "Deep Read Source" }] : []),
-    ];
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      let sseBuffer = "";
 
-    const stream = new ReadableStream({
-      async start(controller) {
-        const encoder = new TextEncoder();
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
 
-        try {
-          if (isGroq) {
-            if (!GROQ_API_KEY) {
-              throw new Error("Missing GROQ_API_KEY");
-            }
+          sseBuffer += decoder.decode(value, { stream: true });
+          const lines = sseBuffer.split("\n");
+          sseBuffer = lines.pop() || "";
 
-            const provider = createOpenAI({ apiKey: GROQ_API_KEY, baseURL: "https://api.groq.com/openai/v1" });
-            const result = await streamText({
-              model: provider(modelId),
-              messages: enrichedMessages as any,
-            });
-
-            for await (const text of result.textStream) {
-              const chunk = `${JSON.stringify({
-                text,
-                model: modelId,
-                rationale: routingRationale,
-                citations,
-                reasoning: reasoningChain,
-              })}\n`;
-              controller.enqueue(encoder.encode(chunk));
-            }
-          } else {
-            const token = await getCopilotToken();
-            const response = await fetch("https://api.githubcopilot.com/chat/completions", {
-              method: "POST",
-              headers: {
-                Authorization: `Bearer ${token}`,
-                "Editor-Version": "vscode/1.85.0",
-                "Editor-Plugin-Version": "copilot/1.155.0",
-                "User-Agent": "GithubCopilot/1.155.0",
-                "Content-Type": "application/json",
-                Accept: "text/event-stream",
-              },
-              body: JSON.stringify({
-                model: modelId,
-                messages: enrichedMessages,
-                stream: true,
-              }),
-            });
-
-            if (!response.ok) {
-              const errText = await response.text();
-              throw new Error(`GitHub API error (${response.status}): ${errText}`);
-            }
-
-            const reader = response.body?.getReader();
-            const decoder = new TextDecoder();
-            let sseBuffer = "";
-
-            if (reader) {
-              while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-
-                sseBuffer += decoder.decode(value, { stream: true });
-                const lines = sseBuffer.split("\n");
-                sseBuffer = lines.pop() || "";
-
-                for (const line of lines) {
-                  const sseLine = line.trim();
-                  if (!sseLine || sseLine === "data: [DONE]") continue;
-                  if (sseLine.startsWith("data: ")) {
-                    try {
-                      const sseData = JSON.parse(sseLine.slice(6));
-                      const text = sseData.choices?.[0]?.delta?.content || "";
-                      if (text) {
-                        const chunk = `${JSON.stringify({
-                          text,
-                          model: modelId,
-                          rationale: routingRationale,
-                          citations,
-                          reasoning: reasoningChain,
-                        })}\n`;
-                        controller.enqueue(encoder.encode(chunk));
-                      }
-                    } catch {}
-                  }
+          for (const line of lines) {
+            const sseLine = line.trim();
+            if (!sseLine || sseLine === "data: [DONE]") continue;
+            if (sseLine.startsWith("data: ")) {
+              try {
+                const sseData = JSON.parse(sseLine.slice(6));
+                const text = sseData.choices?.[0]?.delta?.content || "";
+                if (text) {
+                  await writeLine({ text, model: modelId, rationale: routingRationale, citations, reasoning: reasoningChain });
                 }
-              }
+              } catch {}
             }
           }
-        } catch (err: any) {
-          controller.enqueue(
-            encoder.encode(
-              `${JSON.stringify({
-                text: `\n\n[ERROR] ${err?.message || "Unknown error"}`,
-                reasoning: reasoningChain,
-              })}\n`,
-            ),
-          );
-        } finally {
-          controller.close();
         }
-      },
-    });
+      }
+    } catch (err: any) {
+      await writeLine({ text: `\n\n[ERROR] ${err?.message || "Unknown error"}` });
+    } finally {
+      await writer.close().catch(() => {});
+    }
+  })();
 
-    return new Response(stream, {
-      headers: {
-        "Content-Type": "application/x-ndjson",
-        "Cache-Control": "no-store",
-      },
-    });
-  } catch (err: any) {
-    return new Response(err?.message || "Internal Server Error", { status: 500 });
-  }
+  return new Response(readable, {
+    headers: {
+      "Content-Type": "application/x-ndjson",
+      "Cache-Control": "no-store",
+    },
+  });
 }
-
