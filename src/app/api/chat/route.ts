@@ -433,8 +433,24 @@ The UI will automatically display the sources based on metadata. Simply provide 
           messages: enrichedMessages as any,
         });
 
+        let streamedText = "";
+
         for await (const text of result.textStream) {
+          streamedText += text;
           await writeLine({ text, model: modelId, rationale: routingRationale, citations, reasoning: reasoningChain });
+        }
+
+        if (!streamedText.trim()) {
+          const finalText = await result.text;
+          if (finalText?.trim()) {
+            await writeLine({
+              text: finalText,
+              model: modelId,
+              rationale: routingRationale,
+              citations,
+              reasoning: reasoningChain,
+            });
+          }
         }
 
         await writer.close();
