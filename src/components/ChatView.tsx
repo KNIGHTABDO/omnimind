@@ -99,6 +99,30 @@ const MODEL_ITEMS = [
   { value: "omnimind-1-vision", title: "OmniMind-1 Vision", description: "Image understanding + generation" },
 ];
 
+function normalizeDeltaText(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(normalizeDeltaText).join("");
+  }
+
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+
+    if (typeof record.text === "string") {
+      return record.text;
+    }
+
+    if (typeof record.content === "string") {
+      return record.content;
+    }
+  }
+
+  return "";
+}
+
 export function ChatView() {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
@@ -137,8 +161,17 @@ export function ChatView() {
         content: text.trim(),
         attachments: validAttachments,
       };
+
+      const assistantId = crypto.randomUUID();
+      const assistantMsg: Msg = {
+        id: assistantId,
+        role: "assistant",
+        content: "",
+      };
+
+      const outgoingMessages = [...messages, userMsg].map((m) => ({ role: m.role, content: m.content }));
       
-      setMessages((prev) => [...prev, userMsg]);
+      setMessages((prev) => [...prev, userMsg, assistantMsg]);
       setInput("");
       setAttachments([]); // Clear from input immediately
       setIsLoading(true);
@@ -150,7 +183,7 @@ export function ChatView() {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            messages: [...messages, userMsg].map((m) => ({ role: m.role, content: m.content })),
+            messages: outgoingMessages,
             model: selectedModel,
             attachments: validAttachments,
           }),
@@ -161,18 +194,38 @@ export function ChatView() {
           throw new Error(errText || `Request failed (${response.status})`);
         }
 
-        const assistantId = crypto.randomUUID();
-        const assistantMsg: Msg = {
-          id: assistantId,
-          role: "assistant",
-          content: "",
-        };
-        
-        setMessages((prev) => [...prev, assistantMsg]);
-
         const reader = response.body?.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
+
+        const applyDelta = (delta: any) => {
+          const deltaText = normalizeDeltaText(delta?.text ?? delta?.content);
+          const hasVisibleDelta =
+            Boolean(deltaText) ||
+            Boolean(delta?.reasoning) ||
+            Boolean(delta?.model) ||
+            Boolean(delta?.rationale) ||
+            Boolean(delta?.citations);
+
+          if (!hasVisibleDelta) return;
+
+          setIsLoading(false);
+
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? {
+                    ...m,
+                    content: m.content + deltaText,
+                    model: delta.model || m.model,
+                    reasoning: delta.reasoning || m.reasoning,
+                    rationale: delta.rationale || m.rationale,
+                    citations: delta.citations || m.citations,
+                  }
+                : m
+            )
+          );
+        };
 
         if (reader) {
           while (true) {
@@ -187,36 +240,34 @@ export function ChatView() {
               if (!line.trim()) continue;
               try {
                 const delta = JSON.parse(line);
-                setIsLoading(false);
-
-                setMessages((prev) =>
-                  prev.map((m) =>
-                    m.id === assistantId
-                      ? {
-                          ...m,
-                          content: m.content + delta.text,
-                          model: delta.model || m.model,
-                          reasoning: delta.reasoning || m.reasoning,
-                          rationale: delta.rationale || m.rationale,
-                          citations: delta.citations || m.citations,
-                        }
-                      : m
-                  )
-                );
+                applyDelta(delta);
               } catch (e) {
                 // skip error
               }
             }
           }
+
+          if (buffer.trim()) {
+            try {
+              const delta = JSON.parse(buffer);
+              applyDelta(delta);
+            } catch (e) {
+              // skip error
+            }
+          }
         }
       } catch (error) {
         console.error("Chat error:", error);
-        const errorMsg: Msg = {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: "Sorry, I encountered an error while orchestrating your request.",
-        };
-        setMessages((prev) => [...prev, errorMsg]);
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId
+              ? {
+                  ...m,
+                  content: "Sorry, I encountered an error while orchestrating your request.",
+                }
+              : m
+          )
+        );
       } finally {
         setIsLoading(false);
       }

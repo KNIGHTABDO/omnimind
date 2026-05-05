@@ -132,6 +132,85 @@ const MODEL_CHAINS = {
 
 type ChatMessage = { role: string; content: string };
 
+function extractTextFromChunkValue(value: unknown): string {
+  if (!value) return "";
+
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(extractTextFromChunkValue).join("");
+  }
+
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+
+    if (typeof record.deltaContent === "string") {
+      return record.deltaContent;
+    }
+
+    if (typeof record.text === "string") {
+      return record.text;
+    }
+
+    if (typeof record.content === "string") {
+      return record.content;
+    }
+
+    if (record.type === "text" && typeof record.text === "string") {
+      return record.text;
+    }
+  }
+
+  return "";
+}
+
+function extractAssistantText(payload: any): string {
+  if (payload?.type === "assistant.message_delta" || payload?.type === "assistant.message") {
+    return extractTextFromChunkValue(payload?.data?.deltaContent) || extractTextFromChunkValue(payload?.data?.content);
+  }
+
+  return (
+    extractTextFromChunkValue(payload?.choices?.[0]?.delta?.content) ||
+    extractTextFromChunkValue(payload?.choices?.[0]?.message?.content)
+  );
+}
+
+function extractAssistantReasoning(payload: any): string {
+  if (payload?.type === "assistant.reasoning_delta" || payload?.type === "assistant.reasoning") {
+    return extractTextFromChunkValue(payload?.data?.deltaContent) || extractTextFromChunkValue(payload?.data?.content);
+  }
+
+  return (
+    extractTextFromChunkValue(payload?.choices?.[0]?.delta?.reasoning_text) ||
+    extractTextFromChunkValue(payload?.choices?.[0]?.message?.reasoning_text)
+  );
+}
+
+function parseSseEventBlock(eventBlock: string): any | null {
+  const dataLines = eventBlock
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trimStart());
+
+  if (dataLines.length === 0) {
+    return null;
+  }
+
+  const payload = dataLines.join("\n");
+  if (!payload || payload === "[DONE]") {
+    return null;
+  }
+
+  try {
+    return JSON.parse(payload);
+  } catch {
+    return null;
+  }
+}
+
 export async function POST(req: Request) {
   const { readable, writable } = new TransformStream();
   const writer = writable.getWriter();
@@ -385,9 +464,42 @@ The UI will automatically display the sources based on metadata. Simply provide 
         throw new Error(`GitHub API error (${response.status}): ${errText}`);
       }
 
+      const responseType = response.headers.get("content-type") || "";
+      if (responseType.includes("application/json")) {
+        const json = await response.json();
+        const text = extractAssistantText(json);
+        const reasoningDelta = extractAssistantReasoning(json);
+
+        if (reasoningDelta) {
+          reasoningChain += `\n${reasoningDelta}`;
+        }
+
+        if (text || reasoningDelta) {
+          await writeLine({ text, model: modelId, rationale: routingRationale, citations, reasoning: reasoningChain });
+        }
+
+        await writer.close();
+        return;
+      }
+
       const reader = response.body?.getReader();
       const decoder = new TextDecoder();
       let sseBuffer = "";
+
+      const flushSseEventBlock = async (eventBlock: string) => {
+        const sseData = parseSseEventBlock(eventBlock);
+        if (!sseData) return;
+
+        const reasoningDelta = extractAssistantReasoning(sseData);
+        if (reasoningDelta) {
+          reasoningChain += `\n${reasoningDelta}`;
+        }
+
+        const text = extractAssistantText(sseData);
+        if (text || reasoningDelta) {
+          await writeLine({ text, model: modelId, rationale: routingRationale, citations, reasoning: reasoningChain });
+        }
+      };
 
       if (reader) {
         while (true) {
@@ -395,22 +507,16 @@ The UI will automatically display the sources based on metadata. Simply provide 
           if (done) break;
 
           sseBuffer += decoder.decode(value, { stream: true });
-          const lines = sseBuffer.split("\n");
-          sseBuffer = lines.pop() || "";
+          const eventBlocks = sseBuffer.split("\n\n");
+          sseBuffer = eventBlocks.pop() || "";
 
-          for (const line of lines) {
-            const sseLine = line.trim();
-            if (!sseLine || sseLine === "data: [DONE]") continue;
-            if (sseLine.startsWith("data: ")) {
-              try {
-                const sseData = JSON.parse(sseLine.slice(6));
-                const text = sseData.choices?.[0]?.delta?.content || "";
-                if (text) {
-                  await writeLine({ text, model: modelId, rationale: routingRationale, citations, reasoning: reasoningChain });
-                }
-              } catch {}
-            }
+          for (const eventBlock of eventBlocks) {
+            await flushSseEventBlock(eventBlock);
           }
+        }
+
+        if (sseBuffer.trim()) {
+          await flushSseEventBlock(sseBuffer);
         }
       }
     } catch (err: any) {
