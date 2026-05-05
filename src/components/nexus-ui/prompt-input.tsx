@@ -110,7 +110,7 @@ const PromptInputTextarea = React.forwardRef<
           aria-label="Message input"
           placeholder="How can I help you today?"
           className={cn(
-            "min-h-14 w-full resize-none border-0 bg-transparent px-4 py-4 text-sm leading-6 font-normal text-primary shadow-none outline-none placeholder:text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0 dark:bg-transparent",
+            "min-h-14 w-full resize-none border-0 bg-transparent px-4 py-4 text-[16px] leading-6 font-normal text-primary shadow-none outline-none placeholder:text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0 dark:bg-transparent md:text-sm",
             className,
           )}
           onKeyDown={handleKeyDown}

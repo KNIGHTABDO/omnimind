@@ -229,7 +229,7 @@ export function ChatView() {
   };
 
   return (
-    <div className="relative z-10 flex flex-col h-[calc(100vh-88px)] max-w-3xl mx-auto px-4 animate-fade-in-up">
+    <div className="relative z-10 flex flex-col h-[calc(100vh-88px)] min-h-[calc(100vh-88px)] [@supports(height:100dvh)]:h-[calc(100dvh-88px)] [@supports(height:100dvh)]:min-h-[calc(100dvh-88px)] max-w-3xl mx-auto px-4 animate-fade-in-up">
       {messages.length === 0 && !isLoading ? (
         <div className="flex-1 flex flex-col items-center justify-center gap-8">
           <div className="text-center">
@@ -349,7 +349,7 @@ export function ChatView() {
         </Thread>
       )}
 
-      <div className="pb-6 pt-2">
+      <div className="pt-2" style={{ paddingBottom: "calc(1.5rem + env(safe-area-inset-bottom))" }}>
         <Attachments attachments={attachments} onAttachmentsChange={setAttachments} accept="image/*,.pdf,.txt,.md,.csv">
           {attachments.length > 0 && (
             <AttachmentList className="mb-3 flex gap-2 flex-wrap">
@@ -402,9 +402,9 @@ export function ChatView() {
           </PromptInput>
         </Attachments>
 
-        <div className="flex items-center gap-3 mt-3 px-1">
+        <div className="flex flex-wrap items-center gap-2 mt-3 px-1">
           <ModelSelector value={selectedModel} onValueChange={setSelectedModel} items={MODEL_ITEMS.map((m) => ({ value: m.value, title: m.title, description: m.description }))}>
-            <ModelSelectorTrigger className="liquid-glass rounded-full px-3 py-1.5 text-xs text-hero-muted hover:text-hero-text border-0 h-auto" />
+            <ModelSelectorTrigger className="liquid-glass rounded-full px-4 py-2 text-[14px] text-hero-muted hover:text-hero-text border-0 h-auto sm:px-3 sm:py-1.5 sm:text-xs" />
             <ModelSelectorContent className="bg-background/95 backdrop-blur-xl border-border">
               <ModelSelectorGroup>
                 <ModelSelectorLabel className="text-hero-muted">Models</ModelSelectorLabel>
@@ -416,7 +416,7 @@ export function ChatView() {
               </ModelSelectorGroup>
             </ModelSelectorContent>
           </ModelSelector>
-          <span className="text-[10px] text-hero-muted/50 uppercase tracking-widest">{MODEL_ITEMS.find(m => m.value === selectedModel)?.title} Active</span>
+          <span className="text-[12px] text-hero-muted/60 uppercase tracking-widest sm:text-[10px]">{MODEL_ITEMS.find(m => m.value === selectedModel)?.title} Active</span>
         </div>
       </div>
 

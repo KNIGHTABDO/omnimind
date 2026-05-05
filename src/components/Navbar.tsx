@@ -4,7 +4,7 @@ import Link from "next/link";
 
 export function Navbar({ onBeginJourney, showChat }: { onBeginJourney: () => void; showChat: boolean }) {
   return (
-    <nav className="relative z-10 flex items-center justify-between px-8 py-6 max-w-7xl mx-auto">
+    <nav className="relative z-10 flex items-center justify-between px-5 py-6 max-w-7xl mx-auto sm:px-8">
       <Link
         href="/"
         className="text-3xl tracking-tight text-hero-text hover:opacity-80 transition-opacity cursor-pointer text-left"
@@ -22,7 +22,7 @@ export function Navbar({ onBeginJourney, showChat }: { onBeginJourney: () => voi
       {!showChat && (
         <button
           onClick={onBeginJourney}
-          className="liquid-glass rounded-full px-6 py-2.5 text-sm text-hero-text transition-transform hover:scale-[1.03] cursor-pointer"
+          className="liquid-glass rounded-full px-6 py-3 text-[14px] text-hero-text transition-transform hover:scale-[1.03] cursor-pointer sm:py-2.5 sm:text-sm"
         >
           Begin Journey
         </button>
