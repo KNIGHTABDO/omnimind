@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { Menu01Icon } from "@hugeicons/core-free-icons";
 
-export function Navbar({ onBeginJourney, showChat }: { onBeginJourney: () => void; showChat: boolean }) {
+export function Navbar({ onBeginJourney, showChat, onToggleSidebar }: { onBeginJourney: () => void; showChat: boolean; onToggleSidebar?: () => void }) {
   return (
     <nav className="relative z-10 flex items-center justify-between px-5 py-6 max-w-7xl mx-auto sm:px-8">
       <Link
@@ -27,7 +29,14 @@ export function Navbar({ onBeginJourney, showChat }: { onBeginJourney: () => voi
           Begin Journey
         </button>
       )}
-      {showChat && <div />}
+      {showChat && (
+        <button
+          onClick={onToggleSidebar}
+          className="liquid-glass rounded-full p-3 text-hero-text transition-transform hover:scale-[1.03] cursor-pointer"
+        >
+          <HugeiconsIcon icon={Menu01Icon} className="size-5" />
+        </button>
+      )}
     </nav>
   );
 }

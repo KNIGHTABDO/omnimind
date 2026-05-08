@@ -1,6 +1,9 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { VoiceInputButton } from "@/components/VoiceInputButton";
+import { ArtifactPanel } from "@/components/ArtifactPanel";
 import {
   PromptInput,
   PromptInputTextarea,
@@ -129,6 +132,7 @@ export function ChatView() {
   const [isLoading, setIsLoading] = useState(false);
   const [attachments, setAttachments] = useState<AttachmentMeta[]>([]);
   const [selectedModel, setSelectedModel] = useState("omnimind-1");
+  const [artifactContent, setArtifactContent] = useState<string | null>(null);
   const [activeRationale, setActiveRationale] = useState<{ model: string, text: string } | null>(null);
 
   const sendMessage = useCallback(
@@ -279,8 +283,37 @@ export function ChatView() {
     sendMessage(input);
   };
 
+  const handleSend = (e?: any) => {
+    e?.preventDefault();
+    if (typeof navigator !== 'undefined' && navigator.vibrate) {
+      navigator.vibrate(20);
+    }
+    handleSubmit();
+  };
+
   return (
     <div className="relative z-10 flex flex-col h-[calc(100vh-88px)] min-h-[calc(100vh-88px)] [@supports(height:100dvh)]:h-[calc(100dvh-88px)] [@supports(height:100dvh)]:min-h-[calc(100dvh-88px)] max-w-3xl mx-auto px-4 animate-fade-in-up">
+      <AnimatePresence>
+        {isLoading && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 pointer-events-none z-0"
+            style={{
+              boxShadow: "inset 0 0 100px rgba(255, 255, 255, 0.05)",
+              borderRadius: "2rem"
+            }}
+          >
+            <motion.div
+              animate={{ opacity: [0.3, 0.6, 0.3] }}
+              transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+              className="absolute inset-0 bg-gradient-to-t from-white/5 to-transparent rounded-[2rem]"
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
+      <div className="flex-1 relative z-10 w-full flex flex-col min-h-0">
       {messages.length === 0 && !isLoading ? (
         <div className="flex-1 flex flex-col items-center justify-center gap-8">
           <div className="text-center">
@@ -336,7 +369,17 @@ export function ChatView() {
                           })}
                         </div>
                       )}
-                      <MessageMarkdown>{m.content}</MessageMarkdown>
+                      <div onClick={() => {
+                        if (m.content.includes("```")) {
+                          const codeBlockMatch = m.content.match(/```[\s\S]*?```/);
+                          if (codeBlockMatch) {
+                             const code = codeBlockMatch[0].replace(/```\w*\n/, '').replace(/```$/, '');
+                             setArtifactContent(code);
+                          }
+                        }
+                      }} className="cursor-pointer">
+                        <MessageMarkdown>{m.content}</MessageMarkdown>
+                      </div>
                     </div>
                   </MessageContent>
                   
@@ -399,8 +442,9 @@ export function ChatView() {
           <ThreadScrollToBottom />
         </Thread>
       )}
+      </div>
 
-      <div className="pt-2" style={{ paddingBottom: "calc(1.5rem + env(safe-area-inset-bottom))" }}>
+      <div className="pt-2 relative z-10" style={{ paddingBottom: "calc(1.5rem + env(safe-area-inset-bottom))" }}>
         <Attachments attachments={attachments} onAttachmentsChange={setAttachments} accept="image/*,.pdf,.txt,.md,.csv">
           {attachments.length > 0 && (
             <AttachmentList className="mb-3 flex gap-2 flex-wrap">
@@ -429,7 +473,7 @@ export function ChatView() {
               placeholder={`Message ${MODEL_ITEMS.find(m => m.value === selectedModel)?.title ?? "OmniMind"}...`}
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSubmit(); } }}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { handleSend(e); } }}
               className="text-hero-text placeholder:text-muted-foreground bg-transparent border-0 focus-visible:ring-0"
             />
             <PromptInputActions>
@@ -441,10 +485,11 @@ export function ChatView() {
                     </Button>
                   </PromptInputAction>
                 </AttachmentTrigger>
+                <VoiceInputButton />
               </PromptInputActionGroup>
               <PromptInputActionGroup>
                 <PromptInputAction asChild>
-                  <Button size="icon" className="rounded-full bg-hero-text text-background hover:bg-hero-muted" disabled={(!input.trim() && attachments.length === 0) || isLoading} onClick={handleSubmit}>
+                  <Button size="icon" className="rounded-full bg-hero-text text-background hover:bg-hero-muted" disabled={(!input.trim() && attachments.length === 0) || isLoading} onClick={handleSend}>
                     <ArrowUp className="size-4" />
                   </Button>
                 </PromptInputAction>
@@ -489,6 +534,11 @@ export function ChatView() {
           </div>
         </div>
       )}
+      <ArtifactPanel
+        isOpen={artifactContent !== null}
+        onClose={() => setArtifactContent(null)}
+        content={artifactContent || ""}
+      />
     </div>
   );
 }
